@@ -70,7 +70,7 @@ ba_track_id: dbf07760dd34f72df4e1099d42acfece
 
 # Sidebar settings
 sidebar: true # whether or not using Sidebar.
-sidebar-about-description: "整点薯条"
+sidebar-about-description: "目前就职于深圳腾讯, 主要做k8s、算力和云, 算法、操作系统、工程、分布式、云都沾点边, 封面是韩国独立组合dareharu的歌曲配图(FLOWER和KARMA)"
 sidebar-avatar: https://github.com/ilyee.png # use absolute URL, seeing it's used in both `/` and `/about/`
 
 # Featured Tags

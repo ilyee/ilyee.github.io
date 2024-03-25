@@ -1,6 +1,6 @@
 ---
 layout:       post
-title:        "分布式训练"
+title:        "从啥也不会到DeepSpeed————一篇大模型分布式训练的学习过程总结"
 author:       "ilyee"
 header-style: text
 catalog:      true
@@ -11,13 +11,13 @@ tags:
     - 分布式训练
 ---
 
-# 为什么我要写这个？
+## 为什么我要写这个？
 
 系统化的学习大模型，除了知道大模型是什么，也得知道大模型是如何训练的，对大模型的实际应用有更加定量的认知，该文章也算是一篇分布式训练的学习过程总结，作为循序渐进学习分布式训练的总结
 
 类似之前写过的LLM文章，本文也建议读者先定性有个宏观认知，然后再细化到某个概念定量了解，遇到不太清楚的概念深度递归去学习
 
-# 为什么需要分布式训练？
+## 为什么需要分布式训练？
 
 主要有两点：
 
@@ -25,13 +25,13 @@ tags:
 
 - 对大模型而言，其所需内存太大，单机装不下
 
-## 分布式训练的加速
+### 分布式训练的加速
 
 这个就很直观了，对于一些单卡可以装载的模型我们可以通过多个卡数据并行的方法训练，然后把一轮数据算出来的梯度求和更新参数进行下一轮的梯度下降
 
 这个范式比较经典的例子就是Parameter Server，后续的章节会定量的介绍
 
-## 大模型的内存开销
+### 大模型的内存开销
 
 我们来定量的算一算大模型需要的内存空间
 
@@ -43,7 +43,7 @@ tags:
 
 不难看出，一个GPT-2模型的训练就能吃光V100的显存了，对于175B的GPT-3的训练，哪怕是目前的H100（显存188GB）也无法单卡装载。因此对于这类大模型只能通过张量并行的方式训练，比如后面会介绍的Megatron和DeepSpeed。
 
-# 我会怎么展开接下来的内容
+## 我会怎么展开接下来的内容
 
 我会先介绍一下分布式的一些必要前置知识，然后我会根据分布式训练随着大模型需求的演进路线展开后续的内容：
 
@@ -53,11 +53,11 @@ tags:
 
 - Tensor Parallelism：模型的一层都装不下了，所以同一个模型层内拆分开训练
 
-- DeepSpeed：可以算作上面一些方法的整合，所以单独提了出来
+- DeepSpeed：可以算作目前大参数大模型分布式训练的终极方法，因此单独提出来了
 
-# 分布式的一些必要前置
+## 分布式的一些必要前置
 
-## Map Reduce
+### Map Reduce
 
 这个是分布式架构的鼻祖级神文，我推荐每个想要了解分布式的人都定性的读一遍这个文章，MapReduce架构可以说是分布式架构的鼻祖，别说分布式训练了，哪怕大数据和k8s等分布式架构上都有它的影子，强烈推荐阅读原文
 
@@ -67,7 +67,7 @@ tags:
 
 - 定性掌握Map Reduce原理
 
-## 通信原语
+### 通信原语
 
 通信原语就是分布式训练用到的数据交换方式的原子操作
 
@@ -81,17 +81,27 @@ tags:
 
 - 最好能用Pytorch上手使用一下这几个通信原语
 
-## 训练的传播方向
+### 训练流程
 
-TODO:elihe
+先定量了解下模型训练时的大概流程
 
-## Gist
+![forward and backward](/img/in-post/2024-03-06-distributed-training/forward-and-backward.png)
 
-[论文](https://www.microsoft.com/en-us/research/uploads/prod/2018/04/fiddle-gist-isca18.pdf)
+还是以混合精度的的Adam为图例，假设数据为fp16和fp32：
 
-TODO:elihe
+- 正向传播时（FWD），上一层fp16的激活值和fp16的参数参与了计算，得到这一层的fp16激活值
 
-## Re-materialization
+- 反向传播时（BWD），本层的激活值和参数参与计算，得到fp16的梯度
+
+- 参数更新时，fp16的梯度以及fp32的参数副本，momentum和variance参与计算，最终算出更新后的fp32参数、momentum和variance，然后将fp32的参数转化为fp16进行本层的参数更新
+
+本节需要了解：
+
+- 混合精度下Adam优化器的参数更新流程
+
+- 定量了解混合精度下Adam优化器在各个流程的数据消耗
+
+### Re-materialization
 
 [论文](https://arxiv.org/pdf/1604.06174.pdf)和[解读](https://blog.csdn.net/yiran103/article/details/79475945)，建议直接看[代码](https://github.com/cybertronai/gradient-checkpointing)
 
@@ -103,13 +113,13 @@ TODO:elihe
 
 - 最好能定量推导gradient checkoutpoint为什么能把训练内存节省到平方根级别
 
-# 数据并行(Data Parallelism)
+## 数据并行(Data Parallelism)
 
 数据并行是比较早期的模型训练方法，在CPU训练或单张GPU能装载下模型的场景下，我们可以用数据并行的思路加速模型的收敛，这是一种很直观的分布式模型加速方案
 
 其实数据并行主要就是Ring All Reduce（无master节点）和Parameter Server（有master节点），其他的方案（如Spark MLlib）原理上都大同小异，因此本章只介绍这俩
 
-## Ring All-reduce
+### Ring All-reduce
 
 原理建议直接看[这个文章](https://zhuanlan.zhihu.com/p/504957661)，代码可以参考[这个](https://zhuanlan.zhihu.com/p/482557067)，其实Ring All-reduce在Pytorch里的实现就是DistributedDataParallel，Ring All-reduce本身流程也是reduce-scatter+all-gather的组合
 
@@ -131,7 +141,7 @@ Ring All-reduce其实是数据并行训练中一轮迭代完成后的参数同�
 
 - 尝试用Pytorch写一个Ring All-reduce的代码
 
-## Parameter Server
+### Parameter Server
 
 [论文](https://www.cs.cmu.edu/~muli/file/ps.pdf)，随便找了篇[中文解读](https://www.zhihu.com/tardis/zm/art/82116922?source_id=1003)
 
@@ -151,7 +161,7 @@ Ring All-reduce其实是数据并行训练中一轮迭代完成后的参数同�
 
 - master节点是如何解决网络单点问题的？
 
-# 管线并行(Pipeline Parallelism)
+## 管线并行(Pipeline Parallelism)
 
 随着模型越来越大，一张卡变得装不下模型。为了训练单卡无法装载的模型，我们可以将模型按层切分到多个机器上,管线并行就是干这么个事
 
@@ -163,7 +173,7 @@ Ring All-reduce其实是数据并行训练中一轮迭代完成后的参数同�
 
 本章会选择PipeDream和GPipe两个最知名的Pipeline并行方式进行展开
 
-## PipeDream
+### PipeDream
 
 [论文](https://arxiv.org/pdf/1806.03377.pdf)和[中文解读](https://zhuanlan.zhihu.com/p/336849279)
 
@@ -185,7 +195,7 @@ PipeDream也是将模型根据层拆分到多个机器上，训练时，允许�
 
 - PipeDream为什么会放大模型的内存占用？
 
-## GPipe
+### GPipe
 
 [论文](https://arxiv.org/pdf/1811.06965.pdf)和[中文解读](https://zhuanlan.zhihu.com/p/648346058)
 
@@ -199,7 +209,7 @@ GPipe是通过将一个batch的数据拆分为micro-batch实现，并且每一�
 
 - GPipe和PipeDream的区别是什么？
 
-# 张量并行(Tensor Parallelism)
+## 张量并行(Tensor Parallelism)
 
 管线并行其实主要还集中在多层神经网络架构的训练上，但是对于Transformer架构的模型（如BERT，GPT等），MultiHead Attention Layer和MLP的计算量翻了几倍，如果继续按管线切分模型的话可能单层参数都无法被显存装载，因此我们也需要横着把同一层的模型切分开来，这便是张量并行
 
@@ -207,7 +217,7 @@ GPipe是通过将一个batch的数据拆分为micro-batch实现，并且每一�
 
 其中最有名的也就是Megatron和Deepspeed了，本章也会详细介绍这两个方法的原理
 
-## Megatron
+### Megatron
 
 [论文](https://arxiv.org/pdf/1909.08053.pdf)，中文解读可以看目前个人认为全网最详细的[系列](https://zhuanlan.zhihu.com/p/366906920)，官方代码在[这里](https://link.zhihu.com/?target=https%3A//github.com/NVIDIA/Megatron-LM)
 
@@ -255,16 +265,13 @@ Megatron多用于训练BERT、GPT和T5等几十B的大参数模型，算大模�
 
 - Multi Head Attention计算时是如何结合应用纵切和横切的？
 
-# DeepSpeed
+## DeepSpeed
 
 PS：这里我把DeepSpeed单独提了出来，因为融合了数据并行、管线并行和内存节省等方法，因此可以看做上面很多方法的整合
 
 随着GPT-3把LLM的参数量推到了175B，训练所需参数大小更是到达了万亿规模，Megatron面对如此大规模的参数也变得无能为力，而DeepSpeed的ZeRO方法问世则很好的解决了这个问题
 
-TODO:elihe
-https://www.cnblogs.com/shengshengwang/p/17758606.html
-
-## ZeRO-DP
+### ZeRO-DP
 
 [论文](https://arxiv.org/pdf/1910.02054.pdf%22%20%5Ct%20%22_blank)和[中文解读](https://zhuanlan.zhihu.com/p/663517415)
 
@@ -282,13 +289,13 @@ ZeRO-DP简单来说就是想办法在数据并行的管线上把模型的参数�
 
 接下来我们介绍三种优化方案，其中$N$是机器数量，$\Psi$是模型参数量，$\theta_{os}$、$\theta_g$、$\theta_p$分别代表优化器状态、梯度和模型参数，$\beta$为单台机器的出入带宽
 
-### $P_{os}$
+#### $P_{os}$
 
 $P_{os}$会让每台设备上都有完整的$\theta_g$和$\theta_p$，但是只保留$\frac{1}{N}$的$\theta_{os}$，训练时也只更新这部分状态对应的参数，每轮训练完成后进行reduce-scatter将所有机器上所有参数的梯度合并到负责的机器上去，然后再用all-gather将每台机器计算出的参数分发给全局，因此参数同步时间为$\frac{2(N-1)\Psi}{N\beta}$
 
 其具体流程和数据并行类似，因此这里就不画图了
 
-### $P_{g}$
+#### $P_{g}$
 
 该方法的假设在于每台设备只能训练部分参数，所以单台设备上其他参数的梯度其实不需要保存。
 
@@ -296,7 +303,7 @@ $P_{os}$会让每台设备上都有完整的$\theta_g$和$\theta_p$，但是只�
 
 ![p_g](/img/in-post/2024-03-06-distributed-training/zero-dp-pg.png)
 
-### $P_{p}$
+#### $P_{p}$
 
 简单来说就是在$P_g$的基础上每一轮加上一次broadcast，把模型参数分发到各个设备上，因此时延相较前两个有显著提升，具体就不画图了，参数同步时间为因为$\frac{3(N-1)\Psi}{N\beta}$，约为正常数据并行的1.5倍
 
@@ -312,34 +319,116 @@ $P_{os}$会让每台设备上都有完整的$\theta_g$和$\theta_p$，但是只�
 
 - ZeRO-DP的三种方法的通讯时间分别为多少？
 
-## ZeRO-R
+### ZeRO-R
 
-ZeRO-R和ZeRO-DP在同一个[论文](https://arxiv.org/pdf/1910.02054.pdf%22%20%5Ct%20%22_blank)里出现（[中文解读](https://zhuanlan.zhihu.com/p/663517415)也是同一篇）
+ZeRO-R和ZeRO-DP在同一个[论文](https://arxiv.org/pdf/1910.02054.pdf%22%20%5Ct%20%22_blank)里出现（[中文解读](https://zhuanlan.zhihu.com/p/663517415)也是同一篇），我理解是一些单节点显存节约方法
 
-### $P_a$
+#### $P_a$
 
-该方法使用类似Re-materilization的方法，在正向传播时设置激活值的存档，反向传播时重新计算激活值，不过该方法更进一步地把激活值拆分到了不同机器上，每次计算时先进行一轮all-gather操作合并激活值，甚至论文中还提到可以把激活值存档放到CPU上去，用额外的通信成本降低激活值的内存开销
+该方法使用类似Re-materilization的方法，在正向传播时设置激活值的存档，反向传播时用存档重新计算激活值，不过该方法更进一步地把激活值拆分到了不同机器上，每次计算时先进行一轮all-gather操作合并激活值，甚至论文中还提到可以把激活值存档放到CPU上去，用额外的通信成本降低激活值的显存开销
 
-### $C_B$
+#### $C_B$
 
-这个就偏向内存管理了，该方法解决的问题是模型的缓冲区申请内存浪费导致的模型无法训练问题。因为默认内存申请策略会造成内存浪费（例如伙伴算法会申请2幂次方内存大小），尤其在大精度大参数计算下该浪费会变得更加严重，所以该方法设置了一个静态的缓冲区大小，使更多的显存可以拿来装载模型，当然这也会带来一定的内存分配延迟（比如静态的缓冲区满了要等待释放）
+这个就偏向显存管理了，对于矩阵计算申请的临时显存而言，由于显存管理策略申请的显存可能远大于实际使用到的显存（例如伙伴算法会申请2幂次方显存大小），该方法便是解决这种显存浪费导致的模型无法装载问题，它设置了一个静态的缓冲区大小，使更多的显存可以拿来装载模型，当然这也会带来一定的显存分配延迟（比如静态的缓冲区满了要等待释放）
 
-### $M_D$
+#### $M_D$
 
-该方法也偏向内存管理，其目的就是降低显存的碎片，简单来说就是预先分配好激活值和梯度的内存块，并及时化内存整理，降低内存碎片的问题来使大块的张量可以得到分配，当然，这也会带来时间成本（毕竟内存整理也需要时间）
+该方法也偏向显存管理，其目的就是降低显存的碎片，简单来说就是预先分配好激活值和梯度的显存块，并及时化显存整理，降低显存碎片的问题来使大块的张量可以得到分配，当然，这也会带来时间成本（毕竟显存整理也需要时间）
 
 本节需要了解：
 
 - 定性了解ZeRO-R三个方法的原理
 
-## ZeRO-Offload
+### ZeRO-Offload
 
 [论文](https://www.usenix.org/system/files/atc21-ren-jie.pdf)和[中文解读](https://zhuanlan.zhihu.com/p/513571706)
 
-## ZeRO-Infinity
+![zero offload arch](/img/in-post/2024-03-06-distributed-training/zero-offload-arch.png)
 
-[论文](https://arxiv.org/pdf/2104.07857.pdf)和[中文解读]()
+ZeRO-Offload的核心思路就是让CPU和内存也参与到训练中去，回顾一下前文用到的训练流程的图，ZeRO-Offload就是把这个流程用上图的方式把fp32参数的更新和float2half操作拆分到了CPU和内存上计算，而前向和后向传播依然由GPU负责
 
-# Other References
+那么，在单卡场景下，流程大概如下图所示：
+
+![zero offload training process](/img/in-post/2024-03-06-distributed-training/zero-offload-training-process.png)
+
+GPU在计算时异步的把已经计算好的参数传递给CPU，同样的，CPU也会异步的传递计算好的参数给GPU。多卡场景其实也一样，每张卡把自己负责的参数传递给CPU计算即可，甚至由于每个CPU负责的数据变少了，CPU的时延也大大的降低了
+
+同时，文章进一步提出了One-Step Delayed，在模型后期得到了充分的收敛后，CPU的参数计算和更新可以放到下一轮迭代期间完成。当然，这会带来振荡的收敛，但是同时也大幅度的稀释了CPU计算的时间，论文中有证明在模型训练的后期开启该方案是可行的，虽然会带来一定的振荡，但总体不会对训练的收敛效果产生影响
+
+![zero offload one-step delayed](/img/in-post/2024-03-06-distributed-training/zero-offload-one-step-delayed.png)
+
+本节需要了解：
+
+- 定性地知道单卡和多卡场景下ZeRO-Offload如何将训练流程拆分到CPU的
+
+- 定量的了解ZeRO-Offload降低显存消耗的比例
+
+- 定性地了解One-Step Delayed机制和它带来的影响
+
+### ZeRO-Infinity
+
+[论文](https://arxiv.org/pdf/2104.07857.pdf)和[中文解读](https://zhuanlan.zhihu.com/p/666244126)，代码就是[DeepSpeed开源项目](https://github.com/microsoft/DeepSpeed)
+
+ZeRO-Infinity结合了ZeRO系列的论文，直接把分布式训练的方案推到一个目前来说接近终点的位置，改论文探讨的模型大小甚至直接到达了Trillion参数量级别（1 Trillion=1000 Billion），因此有很多之前不用考虑的场景在这里都涉及到了。强烈推荐自行阅读论文或者解读，下面本文简单介绍下该论文的思路
+
+#### 显存评估
+
+作者先对显存进行了评估。对于超大的模型，它们的参数量如下图所示（注意模型参数量的单位为Trillions）：
+
+![zero infinity memory](/img/in-post/2024-03-06-distributed-training/zero-infinity-memory.png)
+
+这种规模的模型很明显是没办法交给GPU去装载的，自然而然会用到CPU和NVME，其中(a)图内的Working Mem per GPU就是把所有的模型状态offload到CPU或者NVME后GPU所需要的工作显存，其中Model State就是计算FWD和BWD所需显存，Act.是激活层重新计算（就是激活层ckpt，或者本文提到的re-materilization）所需要的显存
+
+#### 带宽评估
+
+然后作者又对带宽的需求进行了评估，作者推导了效率的表达式，并结合测试给出了不同带宽和超参数情况下的效率对比，这里直接给个论文结论，具体推导可以看论文或解读
+
+![zero infinity bandwidth](/img/in-post/2024-03-06-distributed-training/zero-infinity-bandwidth.png)
+
+依赖这个结论，我们可以根据需要的效率推导所需的带宽约为多少
+
+#### 设计
+
+![zero infinity design](/img/in-post/2024-03-06-distributed-training/zero-infinity-design.png)
+
+ZeRO-Infinity的设计分为几个关键点，这里定性展开下，定量建议看论文或解读：
+
+1. 解决超大规模的设计（Design for Unprecedented Scale）：
+
+   - Infinity offload engine for model states：用到了ZeRO-DP的$P_p$模式，把模型状态都进行了分区，并且所有模型参数存储都放到了CPU或者NVME上
+
+   - CPU Offload for activations：激活值的ckpt也放到了CPU内存中
+
+   - Memory-centric tiling for working memory：可以简单理解为把大张量的计算拆分成多个较小的线性算子序列，用时间换空间的方式防止显存不够用
+
+2. 解决训练效率的设计（Design for Excellent Training Efficiency）：
+
+   - Efficiency w.r.t Parameter and Gradients：提出一种基于带宽的划分策略来提高参数和梯度的传递效率，并允许通过PCIe的重叠通信
+
+   - Efficiency w.r.t Optimizer States：其实就是基于ZeRO-Offload的优化器状态参数传递策略，CPU一边计算参数一边并行传递给GPU，不过在这里用NVME offload时需要经过一次NVME
+
+   - Efficiency w.r.t Activations：也是基于ZeRO-Offload的激活值传递策略，每个GPU通过PCIe并行写数据到CPU，可以超过80%的效率，很显然如果减少激活值ckpt的频率的话也能提升该效率（代价就是增加激活值重算的时间）
+
+3. 解决易用性的设计（Design for Ease of Use）：其实就是基于PyTorch在代码层封装好了各种算子操作（如reduce-scatter和all-gather等），不需要用户自行再写相关的代码了
+
+   - automated data movement：自动在FWD和BWD后触发收集和分区的相关操作，把数据同步到CPU或者NVME
+
+   - automated model partitioning during initialization：初始化时自动分区模型和参数
+
+然后论文后续对上述提到的所有设计进行了原理展开，最后给出了效果和结论，具体的原理本文就不讲了，希望读者能结合梳理出来的脉络通读一下论文，然后再结合论文的原理阅读DeepSpeed的源码
+
+本节需要了解：
+
+- 定性的了解ZeRO-Infinity做了哪些事
+
+- 了解ZeRO-Infinity每个设计所需方法的原理（如Bandwidth-Centric Partitioning，Overlap Centric Design等论文第六章和第七章内容）
+
+- 最好能结合了解到的原理读一读DeepSpeed的开源代码
+
+## 写在结尾
+
+至此为止本文已经介绍完DeepSpeed的原理了，下一篇我将会介绍更底层的ai-infra相关技术。对于该文的错误和遗漏的地方，也希望各位读者指正~
+
+## Other References
 
 [1] https://www.zhihu.com/question/53851014

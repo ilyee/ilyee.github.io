@@ -425,6 +425,18 @@ ZeRO-Infinity的设计分为几个关键点，这里定性展开下，定量建�
 
 - 最好能结合了解到的原理读一读DeepSpeed的开源代码
 
+## 3D Parallelism
+
+可以参考[这个](https://www.microsoft.com/en-us/research/blog/deepspeed-extreme-scale-model-training-for-everyone/)
+
+![3d parallelism](/img/in-post/2024-03-06-distributed-training/3d-parallelism.png)
+
+该方法可以说是把模型并行、管线并行和数据并行结合到了一起，几乎可以用于训练目前所有规模的模型。该方法首先把模型按照层拆分为不同的Pipeline Stage，每个Pipeline Stage内的张量可以用多个设备装载，然后一个完整的Pipeline作为一个Data Parrallel，和其他的完整Pipeline用Zero进行数据并行训练
+
+本章需要了解：
+
+- 3D Parallelism是如何结合模型并行、管线并行和数据并行的
+
 ## 写在结尾
 
 至此为止本文已经介绍完DeepSpeed的原理了，下一篇我将会介绍更底层的ai-infra相关技术。对于该文的错误和遗漏的地方，也希望各位读者指正~
